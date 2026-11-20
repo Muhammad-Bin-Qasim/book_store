@@ -1,0 +1,396 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    function isActiveUser() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('disabled', false) == false;
+    }
+
+    function isActiveOwner(uid) {
+      return isActiveUser() && request.auth.uid == uid;
+    }
+
+    function isAdmin() {
+      return isActiveUser()
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    function validReviewFields() {
+      return request.resource.data.keys().hasOnly([
+          'userId', 'userName', 'rating', 'comment', 'likes', 'likedBy',
+          'createdAt', 'updatedAt'
+        ])
+        && request.resource.data.keys().hasAll([
+          'userId', 'userName', 'rating', 'comment', 'likes', 'likedBy',
+          'createdAt', 'updatedAt'
+        ])
+        && request.resource.data.userId is string
+        && request.resource.data.userName is string
+        && request.resource.data.userName.size() >= 1
+        && request.resource.data.userName.size() <= 80
+        && request.resource.data.rating is number
+        && request.resource.data.rating >= 1
+        && request.resource.data.rating <= 5
+        && request.resource.data.comment is string
+        && request.resource.data.comment.size() >= 3
+        && request.resource.data.comment.size() <= 500
+        && request.resource.data.likes is int
+        && request.resource.data.likes >= 0
+        && request.resource.data.likedBy is list
+        && request.resource.data.likedBy.size() <= 500
+        && request.resource.data.likes == request.resource.data.likedBy.size()
+        && request.resource.data.createdAt is timestamp
+        && request.resource.data.updatedAt is timestamp;
+    }
+
+    function validAggregateAfterReviewCreate(bookId, newRating) {
+      let bookPath = /databases/$(database)/documents/books/$(bookId);
+      let before = get(bookPath).data;
+      let after = getAfter(bookPath).data;
+      let oldCount = before.get('ratingCount', 0);
+      let oldAverage = before.get('avgRating', 0);
+      return exists(bookPath)
+        && existsAfter(bookPath)
+        && oldCount is int
+        && oldCount >= 0
+        && oldAverage is number
+        && after.ratingCount is int
+        && after.ratingCount == oldCount + 1
+        && after.avgRating is number
+        && after.avgRating >= (((oldAverage * oldCount) + newRating) / after.ratingCount) - 0.01
+        && after.avgRating <= (((oldAverage * oldCount) + newRating) / after.ratingCount) + 0.01;
+    }
+
+    function validAggregateAfterReviewUpdate(bookId, oldRating, newRating) {
+      let bookPath = /databases/$(database)/documents/books/$(bookId);
+      let before = get(bookPath).data;
+      let after = getAfter(bookPath).data;
+      let oldCount = before.get('ratingCount', 0);
+      let oldAverage = before.get('avgRating', 0);
+      return exists(bookPath)
+        && existsAfter(bookPath)
+        && oldCount is int
+        && oldCount >= 0
+        && oldAverage is number
+        && after.ratingCount is int
+        && after.ratingCount == oldCount
+        && after.avgRating is number
+        && (
+          (
+            oldRating == newRating
+            && after.avgRating == oldAverage
+          )
+          || (
+            oldRating != newRating
+            && oldCount > 0
+            && after.avgRating >= (((oldAverage * oldCount) - oldRating + newRating) / oldCount) - 0.01
+            && after.avgRating <= (((oldAverage * oldCount) - oldRating + newRating) / oldCount) + 0.01
+          )
+        );
+    }
+
+    function validAggregateAfterReviewDelete(bookId, oldRating) {
+      let bookPath = /databases/$(database)/documents/books/$(bookId);
+      let before = get(bookPath).data;
+      let after = getAfter(bookPath).data;
+      let oldCount = before.get('ratingCount', 0);
+      let oldAverage = before.get('avgRating', 0);
+      return exists(bookPath)
+        && existsAfter(bookPath)
+        && oldCount is int
+        && oldCount > 0
+        && oldAverage is number
+        && after.ratingCount is int
+        && after.ratingCount == oldCount - 1
+        && after.avgRating is number
+        && (
+          (after.ratingCount == 0 && after.avgRating == 0)
+          || (
+            after.ratingCount > 0
+            && after.avgRating >= (((oldAverage * oldCount) - oldRating) / after.ratingCount) - 0.01
+            && after.avgRating <= (((oldAverage * oldCount) - oldRating) / after.ratingCount) + 0.01
+          )
+        );
+    }
+
+    function validReviewAggregateUpdate(bookId) {
+      let reviewPath = /databases/$(database)/documents/books/$(bookId)/reviews/$(request.auth.uid);
+      let reviewExists = exists(reviewPath);
+      let reviewExistsAfter = existsAfter(reviewPath);
+      return isActiveUser()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['avgRating', 'ratingCount'])
+        && request.resource.data.avgRating is number
+        && request.resource.data.avgRating >= 0
+        && request.resource.data.avgRating <= 5
+        && request.resource.data.ratingCount is int
+        && request.resource.data.ratingCount >= 0
+        && (
+          (!reviewExists
+            && reviewExistsAfter
+            && getAfter(reviewPath).data.userId == request.auth.uid
+            && validAggregateAfterReviewCreate(
+              bookId,
+              getAfter(reviewPath).data.rating
+            ))
+          || (reviewExists
+            && reviewExistsAfter
+            && get(reviewPath).data.userId == request.auth.uid
+            && getAfter(reviewPath).data.userId == request.auth.uid
+            && getAfter(reviewPath).data.diff(get(reviewPath).data).affectedKeys().hasAny([
+              'userName', 'rating', 'comment', 'updatedAt'
+            ])
+            && getAfter(reviewPath).data.diff(get(reviewPath).data).affectedKeys().hasOnly([
+              'userName', 'rating', 'comment', 'updatedAt'
+            ])
+            && validAggregateAfterReviewUpdate(
+              bookId,
+              get(reviewPath).data.rating,
+              getAfter(reviewPath).data.rating
+            ))
+          || (reviewExists
+            && !reviewExistsAfter
+            && get(reviewPath).data.userId == request.auth.uid
+            && validAggregateAfterReviewDelete(
+              bookId,
+              get(reviewPath).data.rating
+            ))
+        );
+    }
+
+    function reviewOwnerEdit() {
+      return isActiveUser()
+        && request.auth.uid == resource.data.userId
+        && request.resource.data.userId == resource.data.userId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'userName', 'rating', 'comment', 'updatedAt'
+        ])
+        && request.resource.data.userName is string
+        && request.resource.data.userName.size() >= 1
+        && request.resource.data.userName.size() <= 80
+        && request.resource.data.rating is number
+        && request.resource.data.rating >= 1
+        && request.resource.data.rating <= 5
+        && request.resource.data.comment is string
+        && request.resource.data.comment.size() >= 3
+        && request.resource.data.comment.size() <= 500
+        && request.resource.data.updatedAt is timestamp;
+    }
+
+    function reviewLikeChange() {
+      return isActiveUser()
+        && request.auth.uid != resource.data.userId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['likes', 'likedBy'])
+        && resource.data.likes is int
+        && request.resource.data.likes is int
+        && request.resource.data.likedBy is list
+        && resource.data.likedBy is list
+        && request.resource.data.likedBy.size() <= 500
+        && resource.data.likes == resource.data.likedBy.size()
+        && request.resource.data.likes == request.resource.data.likedBy.size()
+        && (
+          (
+            !resource.data.likedBy.hasAny([request.auth.uid])
+            && request.resource.data.likedBy.hasAll(resource.data.likedBy)
+            && request.resource.data.likedBy.hasAny([request.auth.uid])
+            && request.resource.data.likedBy.size() == resource.data.likedBy.size() + 1
+            && request.resource.data.likes == resource.data.likes + 1
+          )
+          ||
+          (
+            resource.data.likedBy.hasAny([request.auth.uid])
+            && resource.data.likedBy.hasAll(request.resource.data.likedBy)
+            && !request.resource.data.likedBy.hasAny([request.auth.uid])
+            && request.resource.data.likedBy.size() == resource.data.likedBy.size() - 1
+            && request.resource.data.likes == resource.data.likes - 1
+            && request.resource.data.likes >= 0
+          )
+        );
+    }
+
+    function validOwnUserUpdate(uid) {
+      return isActiveOwner(uid)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'name', 'email', 'addresses', 'paymentMethods'
+        ])
+        && request.resource.data.get('role', 'user') == resource.data.get('role', 'user')
+        && request.resource.data.get('disabled', false) == resource.data.get('disabled', false);
+    }
+
+    function adminUserUpdate(uid) {
+      return isAdmin()
+        && request.auth.uid != uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['role', 'disabled'])
+        && request.resource.data.get('role', resource.data.get('role', 'user')) in ['user', 'admin']
+        && request.resource.data.get('disabled', resource.data.get('disabled', false)) is bool;
+    }
+
+    function allowedAdminOrderTransition(from, to) {
+      return (from == 'placed' && (to == 'shipped' || to == 'cancelled'))
+        || (from == 'shipped' && (to == 'outForDelivery' || to == 'cancelled'))
+        || (from == 'outForDelivery' && to == 'delivered');
+    }
+
+    function adminOrderStatusChange() {
+      return isAdmin()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'statusHistory'])
+        && request.resource.data.status is string
+        && allowedAdminOrderTransition(resource.data.status, request.resource.data.status)
+        && resource.data.statusHistory is list
+        && request.resource.data.statusHistory is list
+        && request.resource.data.statusHistory.size() == resource.data.statusHistory.size() + 1
+        && request.resource.data.statusHistory.hasAll(resource.data.statusHistory)
+        && request.resource.data.statusHistory[request.resource.data.statusHistory.size() - 1].status == request.resource.data.status
+        && request.resource.data.statusHistory[request.resource.data.statusHistory.size() - 1].timestamp is timestamp;
+    }
+
+    match /users/{uid} {
+      allow read: if isOwner(uid) || isAdmin();
+      allow create: if (isOwner(uid)
+          && request.resource.data.keys().hasOnly([
+            'name', 'email', 'role', 'disabled', 'addresses', 'paymentMethods',
+            'createdAt'
+          ])
+          && request.resource.data.keys().hasAll([
+            'name', 'email', 'role', 'disabled', 'addresses', 'paymentMethods',
+            'createdAt'
+          ])
+          && request.resource.data.name is string
+          && request.resource.data.email is string
+          && request.resource.data.role == 'user'
+          && request.resource.data.disabled == false
+          && request.resource.data.addresses is list
+          && request.resource.data.paymentMethods is list
+          && request.resource.data.createdAt is timestamp)
+        || isAdmin();
+      allow update: if adminUserUpdate(uid) || validOwnUserUpdate(uid);
+      allow delete: if isAdmin() && request.auth.uid != uid;
+    }
+
+    match /books/{bookId} {
+      allow read: if true;
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin() || validReviewAggregateUpdate(bookId);
+
+      match /reviews/{reviewId} {
+        allow read: if true;
+        allow create: if isActiveUser()
+          && request.auth.uid == reviewId
+          && request.resource.data.userId == request.auth.uid
+          && validReviewFields()
+          && request.resource.data.likes == 0
+          && request.resource.data.likedBy.size() == 0
+          && validAggregateAfterReviewCreate(bookId, request.resource.data.rating);
+        allow update: if (isActiveUser()
+            && request.auth.uid == reviewId
+            && reviewOwnerEdit()
+            && validAggregateAfterReviewUpdate(bookId, resource.data.rating, request.resource.data.rating))
+          || reviewLikeChange();
+        allow delete: if isActiveUser()
+          && request.auth.uid == reviewId
+          && resource.data.userId == request.auth.uid
+          && validAggregateAfterReviewDelete(bookId, resource.data.rating);
+      }
+    }
+
+    match /carts/{uid} {
+      allow read, write: if isActiveOwner(uid);
+    }
+
+    match /carts/{uid}/items/{bookId} {
+      allow read: if isActiveOwner(uid);
+      allow create, update: if isActiveOwner(uid)
+        && request.resource.data.keys().hasOnly(['bookId', 'quantity', 'addedAt'])
+        && request.resource.data.keys().hasAll(['bookId', 'quantity', 'addedAt'])
+        && request.resource.data.bookId == bookId
+        && request.resource.data.quantity is int
+        && request.resource.data.quantity >= 1
+        && request.resource.data.quantity <= 10
+        && request.resource.data.addedAt is timestamp;
+      allow delete: if isActiveOwner(uid);
+    }
+
+    match /wishlists/{uid} {
+      allow read, write: if isActiveOwner(uid);
+    }
+
+    match /wishlists/{uid}/items/{bookId} {
+      allow read, delete: if isActiveOwner(uid);
+      allow create, update: if isActiveOwner(uid)
+        && request.resource.data.keys().hasOnly(['bookId', 'addedAt'])
+        && request.resource.data.keys().hasAll(['bookId', 'addedAt'])
+        && request.resource.data.bookId == bookId
+        && request.resource.data.addedAt is timestamp;
+    }
+
+    match /orders/{orderId} {
+      allow read: if isAdmin()
+        || (isActiveUser() && resource.data.userId == request.auth.uid);
+      allow create: if isActiveUser()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.status == 'placed'
+        && request.resource.data.keys().hasAll([
+          'userId', 'items', 'totalPrice', 'shippingAddress', 'paymentMethod',
+          'status', 'statusHistory', 'createdAt', 'estimatedDelivery'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'userId', 'items', 'totalPrice', 'shippingAddress', 'paymentMethod',
+          'status', 'statusHistory', 'createdAt', 'estimatedDelivery'
+        ])
+        && request.resource.data.items is list
+        && request.resource.data.items.size() > 0
+        && request.resource.data.totalPrice is number
+        && request.resource.data.totalPrice >= 0
+        && request.resource.data.shippingAddress is map
+        && request.resource.data.paymentMethod is map
+        && request.resource.data.paymentMethod.keys().hasOnly(['type', 'last4'])
+        && request.resource.data.paymentMethod.keys().hasAll(['type', 'last4'])
+        && request.resource.data.paymentMethod.type is string
+        && request.resource.data.paymentMethod.last4 is string
+        && request.resource.data.statusHistory is list
+        && request.resource.data.statusHistory.size() == 1
+        && request.resource.data.statusHistory[0].status == 'placed'
+        && request.resource.data.statusHistory[0].timestamp is timestamp
+        && request.resource.data.createdAt is timestamp
+        && request.resource.data.estimatedDelivery is timestamp;
+      allow update: if adminOrderStatusChange()
+        || (isActiveUser()
+          && resource.data.userId == request.auth.uid
+          && request.resource.data.userId == resource.data.userId
+          && resource.data.status == 'placed'
+          && request.resource.data.status == 'cancelled'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'statusHistory'])
+          && request.resource.data.statusHistory is list
+          && resource.data.statusHistory is list
+          && request.resource.data.statusHistory.size() == resource.data.statusHistory.size() + 1
+          && request.resource.data.statusHistory.hasAll(resource.data.statusHistory)
+          && request.resource.data.statusHistory[request.resource.data.statusHistory.size() - 1].status == 'cancelled'
+          && request.resource.data.statusHistory[request.resource.data.statusHistory.size() - 1].timestamp is timestamp);
+      allow delete: if isAdmin();
+    }
+
+    // Legacy top-level review collection retained for existing Phase 2-4 data.
+    match /reviews/{reviewId} {
+      allow read: if true;
+      allow create: if isActiveUser()
+        && request.auth.uid == reviewId
+        && request.resource.data.userId == request.auth.uid
+        && validReviewFields()
+        && request.resource.data.likes == 0
+        && request.resource.data.likedBy.size() == 0;
+      allow update: if (isActiveUser() && request.auth.uid == reviewId && reviewOwnerEdit())
+        || reviewLikeChange();
+      allow delete: if isActiveUser()
+        && request.auth.uid == reviewId
+        && resource.data.userId == request.auth.uid;
+    }
+  }
+}

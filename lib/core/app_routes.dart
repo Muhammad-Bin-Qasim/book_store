@@ -1,0 +1,54 @@
+class AppRoutes {
+  AppRoutes._();
+
+  static const String splash = '/';
+  static const String login = '/login';
+  static const String register = '/register';
+  static const String resetPassword = '/reset-password';
+  static const String home = '/home';
+  static const String search = '/search';
+  static const String cart = '/cart';
+  static const String profile = '/profile';
+  static const String bookDetails = '/book/:id';
+  static const String category = '/category';
+  static const String checkout = '/checkout';
+  static const String orderConfirmation = '/order-confirmation';
+  static const String orderDetails = '/orders/:id';
+  static const String profileAddressQuery = 'addAddress';
+  static const String wishlist = '/wishlist';
+  static const String orders = '/orders';
+  static const String adminDashboard = '/admin';
+  static const String manageBooks = '/admin/books';
+  static const String manageOrders = '/admin/orders';
+  static const String manageUsers = '/admin/users';
+  static const String adminBookCreate = '/admin/books/new';
+  static const String adminBookEdit = '/admin/books/:id/edit';
+  static const String adminOrderDetails = '/admin/orders/:id';
+
+  static const String splashName = 'splash';
+  static const String loginName = 'login';
+  static const String registerName = 'register';
+  static const String resetPasswordName = 'resetPassword';
+  static const String homeName = 'home';
+  static const String searchName = 'search';
+  static const String cartName = 'cart';
+  static const String profileName = 'profile';
+  static const String bookDetailsName = 'bookDetails';
+  static const String categoryName = 'category';
+  static const String categoryTypeGenre = 'genre';
+  static const String categoryTypeAuthor = 'author';
+  static const String categoryQueryType = 'type';
+  static const String categoryQueryValue = 'value';
+  static const String checkoutName = 'checkout';
+  static const String orderConfirmationName = 'orderConfirmation';
+  static const String orderDetailsName = 'orderDetails';
+  static const String wishlistName = 'wishlist';
+  static const String ordersName = 'orders';
+  static const String adminDashboardName = 'adminDashboard';
+  static const String manageBooksName = 'manageBooks';
+  static const String manageOrdersName = 'manageOrders';
+  static const String manageUsersName = 'manageUsers';
+  static const String adminBookCreateName = 'adminBookCreate';
+  static const String adminBookEditName = 'adminBookEdit';
+  static const String adminOrderDetailsName = 'adminOrderDetails';
+}
